@@ -3,8 +3,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Users, MapPinned, Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Users, MapPinned, Shield, MapPin, Loader2 } from "lucide-react";
 import { format } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
 
 interface Profile {
   id: string;
@@ -30,10 +35,18 @@ interface AttendanceLog {
 const AdminPanel = () => {
   const [employees, setEmployees] = useState<Profile[]>([]);
   const [allLogs, setAllLogs] = useState<AttendanceLog[]>([]);
+  const [geofenceAreas, setGeofenceAreas] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [newGeofence, setNewGeofence] = useState({
+    name: "",
+    radius_meters: 100,
+  });
+  const { toast } = useToast();
 
   useEffect(() => {
     fetchEmployees();
     fetchAllLogs();
+    fetchGeofenceAreas();
   }, []);
 
   const fetchEmployees = async () => {
@@ -70,6 +83,72 @@ const AdminPanel = () => {
     }
   };
 
+  const fetchGeofenceAreas = async () => {
+    const { data } = await supabase
+      .from("geofence_areas")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (data) {
+      setGeofenceAreas(data);
+    }
+  };
+
+  const addGeofenceWithCurrentLocation = async () => {
+    if (!newGeofence.name.trim()) {
+      toast({
+        title: "Name Required",
+        description: "Please enter a name for the geofence area.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if ("geolocation" in navigator) {
+      setLoading(true);
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const { data: { user } } = await supabase.auth.getUser();
+            const { error } = await supabase.from("geofence_areas").insert({
+              name: newGeofence.name,
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              radius_meters: newGeofence.radius_meters,
+              created_by: user?.id,
+            });
+
+            if (error) throw error;
+
+            toast({
+              title: "Geofence Added",
+              description: `Successfully added "${newGeofence.name}" at your current location.`,
+            });
+
+            setNewGeofence({ name: "", radius_meters: 100 });
+            fetchGeofenceAreas();
+          } catch (error: any) {
+            toast({
+              title: "Error",
+              description: error.message,
+              variant: "destructive",
+            });
+          } finally {
+            setLoading(false);
+          }
+        },
+        (error) => {
+          setLoading(false);
+          toast({
+            title: "Location Error",
+            description: "Please enable location services to add a geofence area.",
+            variant: "destructive",
+          });
+        }
+      );
+    }
+  };
+
   return (
     <Card className="shadow-md">
       <CardHeader>
@@ -80,8 +159,12 @@ const AdminPanel = () => {
         <CardDescription>Manage employees and view all attendance records</CardDescription>
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="employees">
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs defaultValue="geofence">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="geofence">
+              <MapPin className="w-4 h-4 mr-2" />
+              Geofence
+            </TabsTrigger>
             <TabsTrigger value="employees">
               <Users className="w-4 h-4 mr-2" />
               Employees
@@ -91,6 +174,77 @@ const AdminPanel = () => {
               All Logs
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="geofence">
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="geofence-name">Area Name</Label>
+                  <Input
+                    id="geofence-name"
+                    placeholder="e.g., Main Office"
+                    value={newGeofence.name}
+                    onChange={(e) => setNewGeofence({ ...newGeofence, name: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="geofence-radius">Radius (meters)</Label>
+                  <Input
+                    id="geofence-radius"
+                    type="number"
+                    placeholder="100"
+                    value={newGeofence.radius_meters}
+                    onChange={(e) => setNewGeofence({ ...newGeofence, radius_meters: parseInt(e.target.value) || 100 })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>&nbsp;</Label>
+                  <Button 
+                    onClick={addGeofenceWithCurrentLocation} 
+                    disabled={loading}
+                    className="w-full"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Adding...
+                      </>
+                    ) : (
+                      <>
+                        <MapPin className="mr-2 h-4 w-4" />
+                        Add Current Location
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {geofenceAreas.length > 0 ? (
+                <ScrollArea className="h-[300px] pr-4">
+                  <div className="space-y-2">
+                    {geofenceAreas.map((area) => (
+                      <div key={area.id} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <p className="font-medium">{area.name}</p>
+                          <p className="text-sm text-muted-foreground">
+                            Radius: {area.radius_meters}m | 
+                            Lat: {Number(area.latitude).toFixed(6)}, Lng: {Number(area.longitude).toFixed(6)}
+                          </p>
+                        </div>
+                        <Badge variant={area.is_active ? "default" : "secondary"}>
+                          {area.is_active ? "Active" : "Inactive"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-8">
+                  No geofence areas found. Add your first one above!
+                </p>
+              )}
+            </div>
+          </TabsContent>
           
           <TabsContent value="employees">
             <ScrollArea className="h-[400px] pr-4">
